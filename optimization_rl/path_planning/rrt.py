@@ -6,6 +6,13 @@ import numpy as np
 from typing import List, Tuple, Optional
 import random
 import time
+from pathlib import Path
+import sys
+import os
+
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(project_root)
+
 from utils.logging_utils import Logger
 
 class Node:

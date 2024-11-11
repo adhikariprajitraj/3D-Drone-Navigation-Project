@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 import random
+import glob
+from PIL import Image
+import pandas as pd
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(project_root)
@@ -26,30 +29,19 @@ class DynamicEnvironmentVisualizer:
         # Setup visualization
         self.fig = plt.figure(figsize=(15, 5))
         
-        # Create three subplots: RRT path, Current State, Learning Progress
-        self.ax1 = self.fig.add_subplot(131, projection='3d')  # RRT path
-        self.ax2 = self.fig.add_subplot(132, projection='3d')  # Current State
-        self.ax3 = self.fig.add_subplot(133)  # Learning Progress
+        # Create three subplots
+        self.ax1 = self.fig.add_subplot(131, projection='3d')
+        self.ax2 = self.fig.add_subplot(132, projection='3d')
+        self.ax3 = self.fig.add_subplot(133)
         
         self.reward_history = []
         self.episode_steps = []
+        self.frame_counter = 0
         
-    def update_training_plot(self, episode, reward, steps):
-        self.reward_history.append(reward)
-        self.episode_steps.append(steps)
-        
-        self.ax3.clear()
-        self.ax3.plot(self.reward_history, label='Reward')
-        self.ax3.set_xlabel('Episode')
-        self.ax3.set_ylabel('Total Reward')
-        self.ax3.set_title('Training Progress')
-        self.ax3.legend()
-        plt.pause(0.01)
-
-    def plot_environment(self, ax, drone_pos=None, highlight_dynamic=False):
+    def plot_environment(self, ax, drone_pos=None, highlight_dynamic=False, save_frame=False):
         ax.clear()
         
-        # Plot static obstacles
+        # Plot spherical static obstacles
         for obs in self.static_obstacles:
             x, y, z, r = obs
             u = np.linspace(0, 2 * np.pi, 20)
@@ -89,6 +81,22 @@ class DynamicEnvironmentVisualizer:
         ax.set_ylim(0, self.bounds[1])
         ax.set_zlim(0, self.bounds[2])
         ax.legend()
+        
+        if save_frame:
+            plt.savefig(f'frames/frame_{self.frame_counter:04d}.png')
+            self.frame_counter += 1
+
+    def update_training_plot(self, episode, reward, steps):
+        self.reward_history.append(reward)
+        self.episode_steps.append(steps)
+        
+        self.ax3.clear()
+        self.ax3.plot(self.reward_history, label='Reward')
+        self.ax3.set_xlabel('Episode')
+        self.ax3.set_ylabel('Total Reward')
+        self.ax3.set_title('Training Progress')
+        self.ax3.legend()
+        plt.pause(0.01)
 
     def update_visualization(self, drone_pos):
         # Update current state plot
@@ -115,9 +123,9 @@ def setup_environment():
     start = (1, 1, 1)
     goal = (8, 8, 8)
     
-    # Generate static obstacles
+    # Generate static spherical obstacles
     static_obstacles = []
-    for _ in range(10):
+    for _ in range(8):
         x = random.uniform(2, 8)
         y = random.uniform(2, 8)
         z = random.uniform(2, 8)
@@ -126,15 +134,18 @@ def setup_environment():
     
     # Add dynamic obstacles
     dynamic_obstacles = []
-    for _ in range(4):  # Add 4 dynamic obstacles
+    for _ in range(4):
         dynamic_obstacles.append({
             'position': [random.uniform(2, 8), random.uniform(2, 8), random.uniform(2, 8)],
             'velocity': [random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5)],
             'radius': random.uniform(0.3, 0.7)
         })
     
-    # Initialize environment with both static and dynamic obstacles
-    env = DynamicEnvironment(bounds, static_obstacles, dynamic_obstacles)
+    # Add empty cubic obstacles list
+    cubic_obstacles = []
+    
+    # Initialize environment
+    env = DynamicEnvironment(bounds, static_obstacles, dynamic_obstacles, cubic_obstacles)
     
     # Get RRT path
     rrt = RRT(start, goal, static_obstacles, bounds)
@@ -142,9 +153,9 @@ def setup_environment():
     
     if optimal_path is None:
         print("RRT couldn't find a path. Adjusting environment...")
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
     
-    return env, optimal_path, start, goal, bounds, static_obstacles
+    return env, optimal_path, start, goal, bounds, static_obstacles, cubic_obstacles
 
 def compute_path_following_reward(current_pos, optimal_path, closest_point_idx):
     """Compute reward for following the RRT path"""
@@ -197,7 +208,7 @@ def compute_obstacle_avoidance_vector(current_pos, obstacle):
 def train():
     """Train the RL agent"""
     # Setup environment
-    env, optimal_path, start, goal, bounds, static_obstacles = setup_environment()
+    env, optimal_path, start, goal, bounds, static_obstacles, cubic_obstacles = setup_environment()
     if env is None:
         return None, None, None, None, None
     
@@ -224,9 +235,13 @@ def train():
                entropy_coef=0.01)
     
     # Training loop
-    num_episodes = 100
+    num_episodes = 20 # Increased number of episodes
     max_steps = 500
     best_reward = float('-inf')
+    
+    # Clear any existing frames
+    for f in glob.glob("frames/training_*.png"):
+        os.remove(f)
     
     for episode in range(num_episodes):
         state = list(start)
@@ -236,13 +251,14 @@ def train():
         current_path = optimal_path
         
         for step in range(max_steps):
-            # Update visualization
-            if episode % 10 == 0 and step % 5 == 0:
+            # Update visualization and save frames more frequently
+            if episode % 2 == 0:  # Capture every other episode
                 viz.update_visualization(state)
                 viz.plot_environment(viz.ax1)
                 viz.ax1.plot(np.array(current_path)[:, 0], 
                             np.array(current_path)[:, 1], 
                             np.array(current_path)[:, 2], 'g--', label='Current Path')
+                plt.savefig(f'frames/training_{episode:03d}_{step:04d}.png')
                 plt.pause(0.01)
             
             # Get closest dynamic obstacle
@@ -374,6 +390,16 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     # Add text annotation for progress
     text_annotation = ax.text2D(0.02, 0.98, '', transform=ax.transAxes, 
                                verticalalignment='top')
+    
+    # Create a new figure for control values
+    control_fig, control_axes = plt.subplots(4, 1, figsize=(10, 12))
+    control_values = {
+        'roll': [],
+        'pitch': [],
+        'yaw': [],
+        'throttle': []
+    }
+    time_steps = []
     
     state = list(start)
     done = False
@@ -537,7 +563,7 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     if not done:
         print(f"Maximum steps ({max_steps}) reached without reaching goal")
     
-    # Plot final trajectory
+    # Save final trajectory plot
     trajectory = np.array(trajectory)
     ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
             'b-', linewidth=2, label='Learned Path')
@@ -549,8 +575,13 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     plt.show()
 
 if __name__ == "__main__":
-    # Create models directory if it doesn't exist
+    # Create necessary directories
     os.makedirs("models", exist_ok=True)
+    os.makedirs("frames", exist_ok=True)
+    
+    # Clean up any existing frames
+    for f in glob.glob("frames/*.png"):
+        os.remove(f)
     
     # Train the agent
     agent, env, optimal_path, start, goal = train()
@@ -558,4 +589,5 @@ if __name__ == "__main__":
     if agent is not None:
         # Load the best model and visualize final performance
         agent.load_state_dict(torch.load("models/best_policy.pth"))
-        visualize_learned_policy(agent, env, optimal_path, start, goal)
+        control_values = visualize_learned_policy(agent, env, optimal_path, start, goal)
+        create_training_gif()

@@ -62,10 +62,11 @@ class DroneEnvironment(gym.Env):
         pass
 
 class DynamicEnvironment:
-    def __init__(self, bounds, static_obstacles, dynamic_obstacles):
+    def __init__(self, bounds, static_obstacles, dynamic_obstacles, cubic_obstacles):
         self.bounds = bounds
         self.static_obstacles = static_obstacles
         self.dynamic_obstacles = dynamic_obstacles
+        self.cubic_obstacles = cubic_obstacles
         self.reset()
     
     def reset(self):

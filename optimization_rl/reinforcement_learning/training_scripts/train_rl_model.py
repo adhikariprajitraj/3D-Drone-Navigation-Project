@@ -238,7 +238,7 @@ def train():
                entropy_coef=0.01)
     
     # Training loop
-    num_episodes = 10
+    num_episodes = 20
     max_steps = 500
     best_reward = float('-inf')
     

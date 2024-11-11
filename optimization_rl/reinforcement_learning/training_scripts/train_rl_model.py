@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 import random
+import tempfile
+import imageio
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(project_root)
@@ -406,6 +408,10 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal, scenario_nam
     """Visualize the learned policy execution"""
     print("Starting visualization...")
     
+    # Create temporary directory for frames
+    temp_dir = tempfile.mkdtemp()
+    frames = []
+    
     # Create a single figure with one 3D subplot
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
@@ -568,6 +574,11 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal, scenario_nam
         ax.text(env.bounds[0] * 0.05, env.bounds[1] * 0.95, env.bounds[2] * 0.95, 
                 status_text, fontsize=8)
         
+        # Save frame
+        frame_path = os.path.join(temp_dir, f'frame_{step:04d}.png')
+        plt.savefig(frame_path)
+        frames.append(frame_path)
+        
         plt.pause(0.01)
         
         # Print progress
@@ -586,6 +597,22 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal, scenario_nam
         control_history['pitch'].append(action[1])
         control_history['yaw'].append(action[2])
         control_history['throttle'].append(action[3] if len(action) > 3 else 0)
+    
+    # Create GIF
+    print("Creating GIF...")
+    images = []
+    for frame in frames:
+        images.append(imageio.imread(frame))
+    
+    # Save GIF
+    gif_path = f'trajectory_{scenario_name}.gif'
+    imageio.mimsave(gif_path, images, fps=10)
+    print(f"Trajectory saved to {gif_path}")
+    
+    # Cleanup temporary files
+    for frame in frames:
+        os.remove(frame)
+    os.rmdir(temp_dir)
     
     # After trajectory completion, create control value plots
     fig_controls, axs = plt.subplots(2, 2, figsize=(15, 10))

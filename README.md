@@ -7,7 +7,7 @@ The 3D Drone Navigation project aims to design a sophisticated simulation where 
 - **Simulate a 3D environment** with static obstacles to test drone navigation.
 - **Develop a virtual drone model** equipped with necessary movement capabilities.
 - **Implement pathfinding algorithms** such as A* and RRT to generate initial path estimates.
-- **Integrate RL algorithms** (e.g., Deep Q-Networks and Actor-Critic methods) for dynamic path optimization.
+- **Integrate RL algorithms** (e.g., Proximal Policy ) for dynamic path optimization.
 - **Evaluate the performance** of the drone based on path length, time taken, and obstacle avoidance.
 
 ## Features
@@ -16,44 +16,6 @@ The 3D Drone Navigation project aims to design a sophisticated simulation where 
 - **Reinforcement Learning**: The drone refines its path through RL training.
 - **Evaluation Metrics**: The drone’s performance is measured by path length, time to destination, and efficiency.
 
-## Project Structure
-```
-3D-Drone-Navigation-Project/
-|-- README.md
-|-- LICENSE
-|-- .gitignore
-|-- docs/
-|   |-- project_overview.md
-|   |-- references/
-|-- environment/
-|   |-- static_objects_data.csv
-|   |-- environment_setup.py
-|-- drone_model/
-|   |-- drone_simulation.py
-|   |-- controllers/
-|   |   |-- drone_controller.py
-|-- optimization_rl/
-|   |-- path_planning/
-|   |   |-- a_star.py
-|   |   |-- rrt.py
-|   |-- reinforcement_learning/
-|   |   |-- dqn_agent.py
-|   |   |-- actor_critic_agent.py
-|   |   |-- training_scripts/
-|   |       |-- train_rl_model.py
-|-- tests/
-|   |-- test_environment.py
-|   |-- test_rl_agent.py
-|-- utils/
-|   |-- data_loader.py
-|   |-- metrics.py
-|-- requirements.txt
-|-- scripts/
-|   |-- run_simulation.py
-|-- results/
-|   |-- performance_logs/
-|   |-- graphs/
-```
 
 ## Installation and Setup
 
@@ -78,20 +40,11 @@ Ensure you have Python 3.7+ installed and a virtual environment set up.
    pip install -r requirements.txt
    ```
 
-4. **Run initial tests**:
-   Ensure that the setup works by running tests.
-   ```bash
-   python -m unittest discover tests
-   ```
 
 ## Usage
 - **Train the RL model**: Navigate to the `optimization_rl/reinforcement_learning/training_scripts/` directory and run the training script.
    ```bash
    python train_rl_model.py
-   ```
-- **Run the simulation**: Use the `scripts/run_simulation.py` to start a drone simulation.
-   ```bash
-   python scripts/run_simulation.py
    ```
 
 ## Contributing

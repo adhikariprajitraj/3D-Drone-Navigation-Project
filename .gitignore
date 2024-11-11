@@ -4,3 +4,5 @@ logs
 wandb/
 __pycache__/
 models/
+data/
+docs/

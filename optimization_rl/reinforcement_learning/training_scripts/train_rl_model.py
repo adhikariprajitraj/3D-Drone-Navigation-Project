@@ -366,16 +366,20 @@ def train():
 def visualize_learned_policy(agent, env, optimal_path, start, goal):
     """Visualize the learned policy execution"""
     print("Starting visualization...")
-    viz = DynamicEnvironmentVisualizer(env.bounds, env.static_obstacles, 
-                                     env.dynamic_obstacles, optimal_path)
+    
+    # Create a single figure with one 3D subplot
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Add text annotation for progress
+    text_annotation = ax.text2D(0.02, 0.98, '', transform=ax.transAxes, 
+                               verticalalignment='top')
     
     state = list(start)
     done = False
     trajectory = [state]
     max_steps = 500
     step = 0
-    
-    # Initialize closest point index for path following
     closest_idx = 0
     
     while not done and step < max_steps:
@@ -463,7 +467,60 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
         trajectory.append(state)
         
         # Update visualization
-        viz.plot_environment(viz.ax1, state)
+        ax.clear()
+        
+        # Plot static obstacles
+        for obs in env.static_obstacles:
+            x, y, z, r = obs
+            u = np.linspace(0, 2 * np.pi, 20)
+            v = np.linspace(0, np.pi, 20)
+            x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
+            y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
+            z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
+            ax.plot_surface(x_surf, y_surf, z_surf, color='gray', alpha=0.3)
+        
+        # Plot dynamic obstacles
+        for obs in env.dynamic_obstacles:
+            x, y, z = obs['position']
+            r = obs['radius']
+            u = np.linspace(0, 2 * np.pi, 20)
+            v = np.linspace(0, np.pi, 20)
+            x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
+            y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
+            z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
+            ax.plot_surface(x_surf, y_surf, z_surf, color='blue', alpha=0.3)
+        
+        # Plot optimal path
+        path = np.array(optimal_path)
+        ax.plot(path[:, 0], path[:, 1], path[:, 2], 'g--', label='RRT Path')
+        
+        # Plot current trajectory
+        trajectory_array = np.array(trajectory)
+        ax.plot(trajectory_array[:, 0], trajectory_array[:, 1], trajectory_array[:, 2], 
+               'b-', linewidth=2, label='Learned Path')
+        
+        # Plot start and goal
+        ax.scatter(*start, color='green', s=100, label='Start')
+        ax.scatter(*goal, color='red', s=100, label='Goal')
+        
+        # Plot current position
+        ax.scatter(*state, color='blue', s=100, label='Current Position')
+        
+        # Set labels and limits
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_xlim(0, env.bounds[0])
+        ax.set_ylim(0, env.bounds[1])
+        ax.set_zlim(0, env.bounds[2])
+        ax.legend()
+        
+        # Update progress text
+        dist_to_goal = np.linalg.norm(np.array(state) - np.array(goal))
+        status_text = f'Step: {step}\nPosition: [{state[0]:.2f}, {state[1]:.2f}, {state[2]:.2f}]\nDistance to goal: {dist_to_goal:.2f}'
+        ax.text(env.bounds[0] * 0.05, env.bounds[1] * 0.95, env.bounds[2] * 0.95, 
+                status_text, fontsize=8)
+        
         plt.pause(0.01)
         
         # Print progress
@@ -471,7 +528,9 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
             print(f"Step {step}, Position: {[f'{x:.2f}' for x in state]}, Distance to goal: {dist_to_goal:.2f}")
         
         # Check if goal is reached
-        if dist_to_goal < 0.5:
+        if dist_to_goal < 0.01:
+            state = goal  # Set final position exactly at goal
+            trajectory.append(state)
             done = True
             print("Goal reached!")
     
@@ -480,13 +539,13 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     
     # Plot final trajectory
     trajectory = np.array(trajectory)
-    viz.ax1.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
-                 'b-', linewidth=2, label='Learned Path')
-    viz.ax1.legend()
+    ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
+            'b-', linewidth=2, label='Learned Path')
+    ax.legend()
     
     # Add start and goal markers
-    viz.ax1.scatter(*start, color='green', s=100, label='Start')
-    viz.ax1.scatter(*goal, color='red', s=100, label='Goal')
+    ax.scatter(*start, color='green', s=100, label='Start')
+    ax.scatter(*goal, color='red', s=100, label='Goal')
     plt.show()
 
 if __name__ == "__main__":

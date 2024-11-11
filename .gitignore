@@ -3,3 +3,4 @@ logs
 *.log
 wandb/
 __pycache__/
+models/

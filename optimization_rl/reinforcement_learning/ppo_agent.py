@@ -415,6 +415,11 @@ class PPO(torch.nn.Module):
             self.logger.log_scalar(f"training/{name}", value, self._update_step)
         
         self._update_step += 1
+
+        # Store losses for logging
+        self.policy_loss = policy_loss.item()
+        self.value_loss = value_loss.item()
+
         return metrics
 
     def select_action(self, state, eval_mode=False):

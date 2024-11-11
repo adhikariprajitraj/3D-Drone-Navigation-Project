@@ -196,6 +196,20 @@ def compute_obstacle_avoidance_vector(current_pos, obstacle):
 
 def train():
     """Train the RL agent"""
+    # Initialize wandb at the start of training
+    wandb.init(
+        project="drone-path-planning",
+        config={
+            "learning_rate": 0.0003,
+            "gamma": 0.99,
+            "clip_range": 0.2,
+            "value_coef": 0.5,
+            "entropy_coef": 0.01,
+            "num_episodes": 10,
+            "max_steps": 500
+        }
+    )
+
     # Setup environment
     env, optimal_path, start, goal, bounds, static_obstacles = setup_environment()
     if env is None:
@@ -360,7 +374,32 @@ def train():
             torch.save(agent.state_dict(), "models/best_policy.pth")
         
         print(f"Episode {episode} | Reward: {total_reward:.2f} | Steps: {step+1}")
-    
+        
+        # Log metrics after each episode
+        wandb.log({
+            "episode": episode,
+            "total_reward": total_reward,
+            "episode_length": step + 1,
+            "distance_to_goal": np.linalg.norm(np.array(state) - np.array(goal)),
+            "best_reward": best_reward
+        })
+
+        # During training updates, log additional metrics
+        if episode % 5 == 0 and transitions:
+            wandb.log({
+                "mean_advantage": advantages.mean().item(),
+                "mean_return": returns.mean().item()
+            })
+            # Only log losses if they were returned by the update method
+            if hasattr(agent, 'latest_policy_loss') and hasattr(agent, 'latest_value_loss'):
+                wandb.log({
+                    "policy_loss": agent.latest_policy_loss,
+                    "value_loss": agent.latest_value_loss
+                })
+
+    # Close wandb run
+    wandb.finish()
+
     return agent, env, optimal_path, start, goal
 
 def visualize_learned_policy(agent, env, optimal_path, start, goal):

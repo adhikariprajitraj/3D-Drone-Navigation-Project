@@ -224,7 +224,7 @@ def train():
                entropy_coef=0.01)
     
     # Training loop
-    num_episodes = 300
+    num_episodes = 20
     max_steps = 500
     best_reward = float('-inf')
     
@@ -365,39 +365,128 @@ def train():
 
 def visualize_learned_policy(agent, env, optimal_path, start, goal):
     """Visualize the learned policy execution"""
+    print("Starting visualization...")
     viz = DynamicEnvironmentVisualizer(env.bounds, env.static_obstacles, 
                                      env.dynamic_obstacles, optimal_path)
     
     state = list(start)
     done = False
     trajectory = [state]
+    max_steps = 500
+    step = 0
     
-    while not done:
-        state_full = env.get_state_representation(state)
+    # Initialize closest point index for path following
+    closest_idx = 0
+    
+    while not done and step < max_steps:
+        step += 1
+        
+        # Get state representation
+        state_representation = env.get_state_representation(state)
+        path_representation = np.array(optimal_path).flatten()
+        
+        # Ensure consistent size
+        max_path_points = 15
+        max_path_length = (agent.actor_critic.features[0].in_features - len(state_representation)) // 3
+        
+        if len(optimal_path) > max_path_length:
+            path_representation = path_representation[:max_path_length*3]
+        else:
+            padding = np.zeros(max_path_length*3 - len(path_representation))
+            path_representation = np.concatenate([path_representation, padding])
+        
+        state_full = np.concatenate([state_representation, path_representation])
         state_tensor = torch.FloatTensor(state_full).unsqueeze(0)
         
-        # Get action from learned policy
+        # Get action from policy
         with torch.no_grad():
             action = agent.select_action(state_tensor, eval_mode=True)
+            if isinstance(action, torch.Tensor):
+                action = action.numpy()
         
-        # Execute action
-        next_state = np.array(state) + action.numpy()[:3] * 0.5
+        # Normalize action vector
+        action_direction = action[:3]
+        action_norm = np.linalg.norm(action_direction)
+        if action_norm > 1e-6:
+            action_direction = action_direction / action_norm
+        
+        # Find next target point on optimal path
+        current_pos = np.array(state)
+        
+        # Find closest point on optimal path
+        distances = [np.linalg.norm(np.array(p) - current_pos) for p in optimal_path]
+        closest_idx = min(range(len(distances)), key=distances.__getitem__)
+        
+        # Look ahead on the path
+        look_ahead = 3
+        target_idx = min(closest_idx + look_ahead, len(optimal_path) - 1)
+        target_point = optimal_path[target_idx]
+        
+        # Calculate direction to target and goal
+        to_target = np.array(target_point) - current_pos
+        to_goal = np.array(goal) - current_pos
+        
+        dist_to_target = np.linalg.norm(to_target)
+        dist_to_goal = np.linalg.norm(to_goal)
+        
+        # Normalize directions
+        if dist_to_target > 1e-6:
+            target_direction = to_target / dist_to_target
+        else:
+            target_direction = np.zeros(3)
+            
+        if dist_to_goal > 1e-6:
+            goal_direction = to_goal / dist_to_goal
+        else:
+            goal_direction = np.zeros(3)
+        
+        # Combine directions: policy, target point, and goal
+        combined_direction = (0.4 * action_direction + 
+                            0.4 * target_direction +
+                            0.2 * goal_direction)
+        
+        # Normalize combined direction
+        combined_norm = np.linalg.norm(combined_direction)
+        if combined_norm > 1e-6:
+            combined_direction = combined_direction / combined_norm
+        
+        # Take step with adaptive step size
+        step_size = min(0.2, dist_to_goal / 10)  # Smaller steps near goal
+        next_state = current_pos + combined_direction * step_size
+        
+        # Enforce bounds with margin
+        margin = 0.1
+        for i in range(3):
+            next_state[i] = max(margin, min(next_state[i], env.bounds[i] - margin))
+        
         state = next_state.tolist()
         trajectory.append(state)
         
         # Update visualization
         viz.plot_environment(viz.ax1, state)
-        plt.pause(0.05)
+        plt.pause(0.01)
+        
+        # Print progress
+        if step % 10 == 0:
+            print(f"Step {step}, Position: {[f'{x:.2f}' for x in state]}, Distance to goal: {dist_to_goal:.2f}")
         
         # Check if goal is reached
-        if np.linalg.norm(np.array(state) - np.array(goal)) < 0.5:
+        if dist_to_goal < 0.5:
             done = True
+            print("Goal reached!")
+    
+    if not done:
+        print(f"Maximum steps ({max_steps}) reached without reaching goal")
     
     # Plot final trajectory
     trajectory = np.array(trajectory)
     viz.ax1.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
                  'b-', linewidth=2, label='Learned Path')
     viz.ax1.legend()
+    
+    # Add start and goal markers
+    viz.ax1.scatter(*start, color='green', s=100, label='Start')
+    viz.ax1.scatter(*goal, color='red', s=100, label='Goal')
     plt.show()
 
 if __name__ == "__main__":

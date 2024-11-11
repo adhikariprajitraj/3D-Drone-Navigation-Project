@@ -6,201 +6,408 @@ import torch
 import wandb
 import sys
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+import random
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(project_root)
-from optimization_rl.reinforcement_learning.ppo_agent import PPO, DroneEnv
+from optimization_rl.reinforcement_learning.ppo_agent import PPO
+from environment.environment_setup import DynamicEnvironment
 from optimization_rl.path_planning.rrt import RRT
 
+class DynamicEnvironmentVisualizer:
+    def __init__(self, bounds, static_obstacles, dynamic_obstacles, optimal_path=None):
+        self.bounds = bounds
+        self.static_obstacles = static_obstacles
+        self.dynamic_obstacles = dynamic_obstacles
+        self.optimal_path = optimal_path
+        
+        # Setup visualization
+        self.fig = plt.figure(figsize=(15, 5))
+        
+        # Create three subplots: RRT path, Current State, Learning Progress
+        self.ax1 = self.fig.add_subplot(131, projection='3d')  # RRT path
+        self.ax2 = self.fig.add_subplot(132, projection='3d')  # Current State
+        self.ax3 = self.fig.add_subplot(133)  # Learning Progress
+        
+        self.reward_history = []
+        self.episode_steps = []
+        
+    def update_training_plot(self, episode, reward, steps):
+        self.reward_history.append(reward)
+        self.episode_steps.append(steps)
+        
+        self.ax3.clear()
+        self.ax3.plot(self.reward_history, label='Reward')
+        self.ax3.set_xlabel('Episode')
+        self.ax3.set_ylabel('Total Reward')
+        self.ax3.set_title('Training Progress')
+        self.ax3.legend()
+        plt.pause(0.01)
+
+    def plot_environment(self, ax, drone_pos=None, highlight_dynamic=False):
+        ax.clear()
+        
+        # Plot static obstacles
+        for obs in self.static_obstacles:
+            x, y, z, r = obs
+            u = np.linspace(0, 2 * np.pi, 20)
+            v = np.linspace(0, np.pi, 20)
+            x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
+            y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
+            z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
+            ax.plot_surface(x_surf, y_surf, z_surf, color='gray', alpha=0.3)
+        
+        # Plot dynamic obstacles
+        for obs in self.dynamic_obstacles:
+            x, y, z = obs['position']
+            r = obs['radius']
+            u = np.linspace(0, 2 * np.pi, 20)
+            v = np.linspace(0, np.pi, 20)
+            x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
+            y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
+            z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
+            color = 'red' if highlight_dynamic else 'blue'
+            alpha = 0.7 if highlight_dynamic else 0.3
+            ax.plot_surface(x_surf, y_surf, z_surf, color=color, alpha=alpha)
+        
+        # Plot optimal path if available
+        if self.optimal_path is not None:
+            path = np.array(self.optimal_path)
+            ax.plot(path[:, 0], path[:, 1], path[:, 2], 'g--', label='RRT Path')
+        
+        # Plot drone position if available
+        if drone_pos is not None:
+            ax.scatter(*drone_pos, color='green', s=100, label='Drone')
+        
+        # Set labels and limits
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_xlim(0, self.bounds[0])
+        ax.set_ylim(0, self.bounds[1])
+        ax.set_zlim(0, self.bounds[2])
+        ax.legend()
+
+    def update_visualization(self, drone_pos):
+        # Update current state plot
+        self.plot_environment(self.ax2, drone_pos, highlight_dynamic=True)
+        plt.pause(0.01)
+
+def visualize_initial_setup(env, optimal_path, start, goal):
+    """Visualize initial RRT path and environment setup"""
+    viz = DynamicEnvironmentVisualizer(env.bounds, env.static_obstacles, 
+                                     env.dynamic_obstacles, optimal_path)
+    
+    # Plot initial setup
+    viz.plot_environment(viz.ax1)
+    viz.ax1.scatter(*start, color='green', s=100, label='Start')
+    viz.ax1.scatter(*goal, color='red', s=100, label='Goal')
+    viz.ax1.set_title('Initial RRT Path')
+    
+    plt.show(block=False)
+    return viz
+
+def setup_environment():
+    """Setup the training environment and generate RRT path"""
+    bounds = (10, 10, 10)
+    start = (1, 1, 1)
+    goal = (8, 8, 8)
+    
+    # Generate static obstacles
+    static_obstacles = []
+    for _ in range(10):
+        x = random.uniform(2, 8)
+        y = random.uniform(2, 8)
+        z = random.uniform(2, 8)
+        radius = random.uniform(0.5, 1.0)
+        static_obstacles.append((x, y, z, radius))
+    
+    # Add dynamic obstacles
+    dynamic_obstacles = []
+    for _ in range(4):  # Add 4 dynamic obstacles
+        dynamic_obstacles.append({
+            'position': [random.uniform(2, 8), random.uniform(2, 8), random.uniform(2, 8)],
+            'velocity': [random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5), random.uniform(-0.5, 0.5)],
+            'radius': random.uniform(0.3, 0.7)
+        })
+    
+    # Initialize environment with both static and dynamic obstacles
+    env = DynamicEnvironment(bounds, static_obstacles, dynamic_obstacles)
+    
+    # Get RRT path
+    rrt = RRT(start, goal, static_obstacles, bounds)
+    optimal_path = rrt.plan()
+    
+    if optimal_path is None:
+        print("RRT couldn't find a path. Adjusting environment...")
+        return None, None, None, None, None, None
+    
+    return env, optimal_path, start, goal, bounds, static_obstacles
+
+def compute_path_following_reward(current_pos, optimal_path, closest_point_idx):
+    """Compute reward for following the RRT path"""
+    # Find the closest point on the path ahead of the current closest point
+    look_ahead = 3  # Number of points to look ahead
+    target_idx = min(closest_point_idx + look_ahead, len(optimal_path) - 1)
+    target_point = optimal_path[target_idx]
+    
+    # Distance to target point
+    distance = np.linalg.norm(np.array(current_pos) - np.array(target_point))
+    path_reward = -distance * 2.0  # Increased weight for path following
+    
+    # Add bonus for staying close to path
+    min_path_distance = float('inf')
+    for path_point in optimal_path[closest_point_idx:target_idx+1]:
+        dist = np.linalg.norm(np.array(current_pos) - np.array(path_point))
+        min_path_distance = min(min_path_distance, dist)
+    
+    path_reward -= min_path_distance  # Additional penalty for deviating from path
+    
+    return path_reward, target_idx
+
+def get_closest_obstacle(current_pos, dynamic_obstacles, detection_radius=2.0):
+    """Find the closest dynamic obstacle within detection radius"""
+    closest_dist = float('inf')
+    closest_obstacle = None
+    
+    for obs in dynamic_obstacles:
+        dist = np.linalg.norm(np.array(current_pos) - np.array(obs['position']))
+        if dist < closest_dist and dist < detection_radius:
+            closest_dist = dist
+            closest_obstacle = obs
+            
+    return closest_obstacle, closest_dist
+
+def compute_obstacle_avoidance_vector(current_pos, obstacle):
+    """Compute avoidance vector away from obstacle"""
+    direction = np.array(current_pos) - np.array(obstacle['position'])
+    distance = np.linalg.norm(direction)
+    if distance < 0.1:  # Prevent division by zero
+        distance = 0.1
+    normalized_direction = direction / distance
+    
+    # Consider obstacle velocity for better avoidance
+    velocity = np.array(obstacle['velocity'])
+    avoidance_vector = normalized_direction + 0.5 * velocity
+    
+    return avoidance_vector
+
 def train():
-    # Initialize environment
-    env = DroneEnv(
-        obstacles=[(5, 5, 5, 1),
-                  (3, 7, 2, 0.5),
-                  (8, 2, 4, 0.7)],
-        bounds=(10, 10, 10),
-        goal=(8, 8, 8)
-    )
+    """Train the RL agent"""
+    # Setup environment
+    env, optimal_path, start, goal, bounds, static_obstacles = setup_environment()
+    if env is None:
+        return None, None, None, None, None
     
-    # Initialize RRT planner for guidance
-    rrt = RRT(
-        start=(0, 0, 0),
-        goal=env.goal,
-        obstacles=env.obstacles,
-        bounds=env.bounds,
-        step_size=0.5,
-        goal_sample_rate=0.2
-    )
+    # Initialize visualizer
+    viz = visualize_initial_setup(env, optimal_path, start, goal)
     
-    # Get initial path from RRT
-    reference_path = rrt.plan()
+    # Initialize RL agent
+    state_representation = env.get_state_representation(list(start))
+    state_representation_size = len(state_representation)
+    path_representation_size = len(optimal_path) * 3  # 3 coordinates per point
+    total_state_dim = state_representation_size + path_representation_size
+
+    # Ensure consistent state dimension
+    max_path_points = 15  # Set a fixed maximum number of path points
+    fixed_path_dim = max_path_points * 3  # 3 coordinates per point
+    state_dim = state_representation_size + fixed_path_dim
+
+    agent = PPO(state_dim=state_dim, 
+               action_dim=4,
+               lr=0.0003,
+               gamma=0.99,
+               clip_range=0.2,
+               value_coef=0.5,
+               entropy_coef=0.01)
     
-    # Get state and action dimensions from environment
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
-    
-    # Initialize agent with tuned parameters
-    agent = PPO(
-        state_dim=state_dim,
-        action_dim=action_dim,
-        lr=3e-4,
-        gamma=0.99,
-        clip_range=0.2,
-        value_coef=0.5,
-        entropy_coef=0.01
-    )
-    
-    # Training parameters
-    num_episodes = 1000
-    max_steps_per_episode = 500  # Increased step limit
-    num_steps_per_update = 2048  # Increased batch size
-    steps_since_update = 0
-    
-    # Create save directory
-    save_dir = Path("models") / datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Initialize wandb
-    wandb.init(
-        project="drone-navigation",
-        config={
-            "algorithm": "PPO",
-            "num_episodes": num_episodes,
-            "max_steps": max_steps_per_episode,
-            "learning_rate": 3e-4,
-            "gamma": 0.99,
-            "clip_range": 0.2,
-            "value_coef": 0.5,
-            "entropy_coef": 0.01,
-            "num_steps_per_update": num_steps_per_update,
-            "state_dim": state_dim,
-            "action_dim": action_dim
-        }
-    )
-    
+    # Training loop
+    num_episodes = 300
+    max_steps = 500
     best_reward = float('-inf')
-    episode_rewards = []
-    
-    # Setup visualization
-    plt.ion()
-    fig = plt.figure(figsize=(15, 5))
-    ax1 = fig.add_subplot(121, projection='3d')
-    ax2 = fig.add_subplot(122)
     
     for episode in range(num_episodes):
-        state = env.reset()
-        episode_reward = 0
-        positions = [env.position.copy()]
-        done = False
-        steps = 0
+        state = list(start)
+        env.reset()
+        total_reward = 0
+        closest_path_idx = 0
+        current_path = optimal_path
         
-        # Find closest point in reference path for initial guidance
-        current_path_idx = 0
-        
-        while not done and steps < max_steps_per_episode:
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+        for step in range(max_steps):
+            # Update visualization
+            if episode % 10 == 0 and step % 5 == 0:
+                viz.update_visualization(state)
+                viz.plot_environment(viz.ax1)
+                viz.ax1.plot(np.array(current_path)[:, 0], 
+                            np.array(current_path)[:, 1], 
+                            np.array(current_path)[:, 2], 'g--', label='Current Path')
+                plt.pause(0.01)
             
-            # Use RRT guidance in early training
-            if episode < num_episodes * 0.3 and reference_path:  # First 30% of episodes
-                # Find next target point in reference path
-                current_pos = env.position
-                while (current_path_idx < len(reference_path) - 1 and 
-                       np.linalg.norm(np.array(current_pos) - np.array(reference_path[current_path_idx])) < 1.0):
-                    current_path_idx += 1
-                
-                target_pos = reference_path[current_path_idx]
-                direction = np.array(target_pos) - current_pos
-                if np.linalg.norm(direction) > 0:
-                    direction = direction / np.linalg.norm(direction)
-                
-                # Convert direction to tensor before blending
-                guided_action = torch.FloatTensor(np.pad(direction, (0, 1), 'constant'))
-                policy_action = agent.select_action(state_tensor, eval_mode=False)
-                guidance_weight = max(0, 1 - episode / (num_episodes * 0.3))
-                # Ensure the blended action remains a PyTorch tensor
-                action = torch.FloatTensor(guidance_weight * guided_action.numpy() + (1 - guidance_weight) * policy_action.numpy())
+            # Get closest dynamic obstacle
+            closest_obstacle, obstacle_distance = get_closest_obstacle(state, env.dynamic_obstacles)
+            
+            # If obstacle is too close, recalculate RRT path
+            if closest_obstacle and obstacle_distance < 1.5:
+                # Calculate new RRT path from current position to goal
+                rrt = RRT(state, goal, static_obstacles, bounds)
+                new_path = rrt.plan()
+                if new_path is not None:
+                    current_path = new_path
+                    closest_path_idx = 0  # Reset path index for new path
+            
+            # Get target point on path
+            target_point = current_path[min(closest_path_idx + 1, len(current_path) - 1)]
+            direction_to_target = np.array(target_point) - np.array(state)
+            distance_to_target = np.linalg.norm(direction_to_target)
+            
+            if distance_to_target < 0.5:  # If close to current target, move to next point
+                closest_path_idx = min(closest_path_idx + 1, len(current_path) - 1)
+            
+            # Determine action based on situation
+            state_representation = env.get_state_representation(state)
+            path_representation = np.array(current_path).flatten()
+            
+            # Ensure path_representation has consistent size by padding or truncating
+            max_path_length = (state_dim - len(state_representation)) // 3
+            if len(current_path) > max_path_length:
+                path_representation = path_representation[:max_path_length*3]
             else:
-                action = agent.select_action(state_tensor, eval_mode=False)
+                # Pad with zeros if path is shorter
+                padding = np.zeros(max_path_length*3 - len(path_representation))
+                path_representation = np.concatenate([path_representation, padding])
             
-            # Convert action to numpy before passing to env.step()
-            action_np = action.detach().numpy()
-            next_state, reward, done, _ = env.step(action_np)
+            state_full = np.concatenate([state_representation, path_representation])
+            
+            state_tensor = torch.FloatTensor(state_full).unsqueeze(0)
+            
+            if closest_obstacle and obstacle_distance < 1.0:
+                # Obstacle avoidance mode
+                avoidance_vector = compute_obstacle_avoidance_vector(state, closest_obstacle)
+                # Combine avoidance with path following
+                normalized_direction = direction_to_target / (distance_to_target + 1e-6)
+                combined_direction = 0.7 * avoidance_vector + 0.3 * normalized_direction
+                combined_direction = combined_direction / (np.linalg.norm(combined_direction) + 1e-6)
+                action = torch.FloatTensor(np.append(combined_direction, 0.0))  # Add zero for yaw
+            else:
+                # Path following mode
+                normalized_direction = direction_to_target / (distance_to_target + 1e-6)
+                action = torch.FloatTensor(np.append(normalized_direction, 0.0))  # Add zero for yaw
+            
+            # Execute action
+            next_state = np.array(state) + action.numpy()[:3] * 0.5
+            
+            # Compute rewards
+            path_following_reward = -distance_to_target
+            obstacle_penalty = -10.0 if closest_obstacle and obstacle_distance < 0.5 else 0.0
+            goal_reward, done = env.compute_reward(next_state, goal)
+            
+            total_step_reward = (
+                1.0 * path_following_reward +
+                1.0 * obstacle_penalty +
+                2.0 * goal_reward
+            )
             
             # Store transition
-            agent.store_transition(state, action, reward, next_state, done)
-            positions.append(env.position.copy())
+            action = action.view(1, -1)
+            agent.store_transition(
+                state_tensor,
+                action,
+                torch.FloatTensor([total_step_reward]),
+                next_state,
+                torch.tensor([done])
+            )
             
-            # Update state and counters
-            state = next_state
-            episode_reward += reward
-            steps += 1
-            steps_since_update += 1
+            state = next_state.tolist()
+            total_reward += total_step_reward
             
-            # Update policy if enough steps collected
-            if steps_since_update >= num_steps_per_update:
-                states, actions, old_log_probs, returns, advantages = agent.process_transitions()
-                if states is not None and len(advantages) > 0:
-                    loss_stats = agent.update(states, actions, old_log_probs, returns, advantages)
-                    steps_since_update = 0
-                    
-                    if loss_stats:
-                        wandb.log(loss_stats)
+            if done:
+                break
+            
+            # Update environment
+            env.update()
         
-        # Visualization code (unchanged)
-        if episode % 10 == 0:
-            ax1.clear()
-            ax2.clear()
-            
-            positions = np.array(positions)
-            ax1.plot(positions[:, 0], positions[:, 1], positions[:, 2], 'b-', label='Path')
-            ax1.scatter(*env.goal, color='red', s=100, label='Goal')
-            
-            for obs in env.obstacles:
-                x, y, z, r = obs
-                u = np.linspace(0, 2 * np.pi, 20)
-                v = np.linspace(0, np.pi, 20)
-                x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
-                y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
-                z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
-                ax1.plot_surface(x_surf, y_surf, z_surf, color='red', alpha=0.3)
-            
-            ax1.set_xlabel('X')
-            ax1.set_ylabel('Y')
-            ax1.set_zlabel('Z')
-            ax1.set_title(f'Episode {episode} Path')
-            
-            episode_rewards.append(episode_reward)
-            ax2.plot(episode_rewards)
-            ax2.set_title('Training Rewards')
-            ax2.set_xlabel('Episode')
-            ax2.set_ylabel('Reward')
-            
-            plt.draw()
-            plt.pause(0.01)
+        # Update visualization with training progress
+        viz.update_training_plot(episode, total_reward, step + 1)
         
-        # Logging
-        episode_rewards.append(episode_reward)
-        avg_reward = np.mean(episode_rewards[-100:]) if len(episode_rewards) >= 100 else np.mean(episode_rewards)
-        
-        wandb.log({
-            "episode": episode,
-            "episode_reward": episode_reward,
-            "average_reward": avg_reward,
-            "episode_length": steps,
-            "total_steps": episode * max_steps_per_episode + steps
-        })
-        
-        print(f"Episode {episode} | Reward: {episode_reward:.2f} | Average: {avg_reward:.2f} | Steps: {steps}")
+        # Update agent
+        if episode % 5 == 0:
+            # Process transitions only if there are any stored
+            transitions = agent.process_transitions()
+            if transitions:  # Check if we have any transitions to process
+                states, actions, rewards, next_states, dones = transitions
+                
+                # Add debug prints
+                print(f"Buffer sizes - States: {len(states)}, Rewards: {len(rewards)}, Dones: {len(dones)}")
+                
+                returns = agent.compute_returns(rewards, dones)
+                advantages = agent.compute_advantages(returns, states)
+                
+                old_log_probs = agent.get_log_probs(states, actions)
+                
+                # Add size checks before update
+                if len(returns) > 0 and len(states) > 0:
+                    agent.update(states, actions, old_log_probs, returns, advantages)
+                else:
+                    print("Warning: Empty batch, skipping update")
+            else:
+                print("Warning: No transitions to process, skipping update")
         
         # Save best model
-        if avg_reward > best_reward:
-            best_reward = avg_reward
-            agent.save(save_dir / "best_model.pth")
-            wandb.log({"best_reward": best_reward})
+        if total_reward > best_reward:
+            best_reward = total_reward
+            torch.save(agent.state_dict(), "models/best_policy.pth")
+        
+        print(f"Episode {episode} | Reward: {total_reward:.2f} | Steps: {step+1}")
     
-    plt.ioff()
-    wandb.finish()
-    return agent, env
+    return agent, env, optimal_path, start, goal
+
+def visualize_learned_policy(agent, env, optimal_path, start, goal):
+    """Visualize the learned policy execution"""
+    viz = DynamicEnvironmentVisualizer(env.bounds, env.static_obstacles, 
+                                     env.dynamic_obstacles, optimal_path)
+    
+    state = list(start)
+    done = False
+    trajectory = [state]
+    
+    while not done:
+        state_full = env.get_state_representation(state)
+        state_tensor = torch.FloatTensor(state_full).unsqueeze(0)
+        
+        # Get action from learned policy
+        with torch.no_grad():
+            action = agent.select_action(state_tensor, eval_mode=True)
+        
+        # Execute action
+        next_state = np.array(state) + action.numpy()[:3] * 0.5
+        state = next_state.tolist()
+        trajectory.append(state)
+        
+        # Update visualization
+        viz.plot_environment(viz.ax1, state)
+        plt.pause(0.05)
+        
+        # Check if goal is reached
+        if np.linalg.norm(np.array(state) - np.array(goal)) < 0.5:
+            done = True
+    
+    # Plot final trajectory
+    trajectory = np.array(trajectory)
+    viz.ax1.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
+                 'b-', linewidth=2, label='Learned Path')
+    viz.ax1.legend()
+    plt.show()
 
 if __name__ == "__main__":
-    train()
+    # Create models directory if it doesn't exist
+    os.makedirs("models", exist_ok=True)
+    
+    # Train the agent
+    agent, env, optimal_path, start, goal = train()
+    
+    if agent is not None:
+        # Load the best model and visualize final performance
+        agent.load_state_dict(torch.load("models/best_policy.pth"))
+        visualize_learned_policy(agent, env, optimal_path, start, goal)

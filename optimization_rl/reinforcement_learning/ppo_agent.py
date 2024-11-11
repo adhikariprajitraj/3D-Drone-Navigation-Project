@@ -299,7 +299,7 @@ class Memory:
         self.log_probs.clear()
         self.values.clear()
 
-class PPO:
+class PPO(torch.nn.Module):
     """PPO Agent"""
     
     def __init__(self,
@@ -311,6 +311,8 @@ class PPO:
                  value_coef: float = 0.5,
                  entropy_coef: float = 0.01,
                  log_dir: str = "logs"):
+        
+        super(PPO, self).__init__()
         
         self.actor_critic = ActorCritic(state_dim, action_dim)
         self.optimizer = torch.optim.Adam(

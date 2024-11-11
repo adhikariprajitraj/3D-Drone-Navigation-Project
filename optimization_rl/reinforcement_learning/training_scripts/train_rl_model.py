@@ -383,19 +383,13 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     """Visualize the learned policy execution"""
     print("Starting visualization...")
     
-    # Create output directories if they don't exist
-    os.makedirs("frames", exist_ok=True)
-    os.makedirs("visualizations", exist_ok=True)
-    os.makedirs("data", exist_ok=True)
+    # Create a single figure with one 3D subplot
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
     
-    # Clear any existing frames
-    for f in glob.glob("frames/optimal_*.png"):
-        os.remove(f)
-    for f in glob.glob("frames/controls_*.png"):
-        os.remove(f)
-    
-    viz = DynamicEnvironmentVisualizer(env.bounds, env.static_obstacles, 
-                                     env.dynamic_obstacles, optimal_path)
+    # Add text annotation for progress
+    text_annotation = ax.text2D(0.02, 0.98, '', transform=ax.transAxes, 
+                               verticalalignment='top')
     
     # Create a new figure for control values
     control_fig, control_axes = plt.subplots(4, 1, figsize=(10, 12))
@@ -412,6 +406,7 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     trajectory = [state]
     max_steps = 500
     step = 0
+    closest_idx = 0
     
     while not done and step < max_steps:
         step += 1
@@ -497,27 +492,61 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
         state = next_state.tolist()
         trajectory.append(state)
         
-        # Extract control values from action
-        control_values['roll'].append(action[0].item())
-        control_values['pitch'].append(action[1].item())
-        control_values['yaw'].append(action[2].item())
-        control_values['throttle'].append(action[3].item())
-        time_steps.append(step)
+        # Update visualization
+        ax.clear()
         
-        # Update control values plot
-        for ax, (control_name, values) in zip(control_axes, control_values.items()):
-            ax.clear()
-            ax.plot(time_steps, values, 'b-')
-            ax.set_ylabel(control_name.capitalize())
-            ax.set_xlabel('Time Step')
-            ax.grid(True)
-        control_fig.suptitle('Control Values Over Time')
-        control_fig.tight_layout()
+        # Plot static obstacles
+        for obs in env.static_obstacles:
+            x, y, z, r = obs
+            u = np.linspace(0, 2 * np.pi, 20)
+            v = np.linspace(0, np.pi, 20)
+            x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
+            y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
+            z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
+            ax.plot_surface(x_surf, y_surf, z_surf, color='gray', alpha=0.3)
         
-        # Save both environment and control plots
-        viz.plot_environment(viz.ax1, state)
-        plt.savefig(f'frames/optimal_{step:04d}.png')
-        control_fig.savefig(f'frames/controls_{step:04d}.png')
+        # Plot dynamic obstacles
+        for obs in env.dynamic_obstacles:
+            x, y, z = obs['position']
+            r = obs['radius']
+            u = np.linspace(0, 2 * np.pi, 20)
+            v = np.linspace(0, np.pi, 20)
+            x_surf = r * np.outer(np.cos(u), np.sin(v)) + x
+            y_surf = r * np.outer(np.sin(u), np.sin(v)) + y
+            z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
+            ax.plot_surface(x_surf, y_surf, z_surf, color='blue', alpha=0.3)
+        
+        # Plot optimal path
+        path = np.array(optimal_path)
+        ax.plot(path[:, 0], path[:, 1], path[:, 2], 'g--', label='RRT Path')
+        
+        # Plot current trajectory
+        trajectory_array = np.array(trajectory)
+        ax.plot(trajectory_array[:, 0], trajectory_array[:, 1], trajectory_array[:, 2], 
+               'b-', linewidth=2, label='Learned Path')
+        
+        # Plot start and goal
+        ax.scatter(*start, color='green', s=100, label='Start')
+        ax.scatter(*goal, color='red', s=100, label='Goal')
+        
+        # Plot current position
+        ax.scatter(*state, color='blue', s=100, label='Current Position')
+        
+        # Set labels and limits
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_xlim(0, env.bounds[0])
+        ax.set_ylim(0, env.bounds[1])
+        ax.set_zlim(0, env.bounds[2])
+        ax.legend()
+        
+        # Update progress text
+        dist_to_goal = np.linalg.norm(np.array(state) - np.array(goal))
+        status_text = f'Step: {step}\nPosition: [{state[0]:.2f}, {state[1]:.2f}, {state[2]:.2f}]\nDistance to goal: {dist_to_goal:.2f}'
+        ax.text(env.bounds[0] * 0.05, env.bounds[1] * 0.95, env.bounds[2] * 0.95, 
+                status_text, fontsize=8)
+        
         plt.pause(0.01)
         
         # Print progress
@@ -525,7 +554,9 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
             print(f"Step {step}, Position: {[f'{x:.2f}' for x in state]}, Distance to goal: {dist_to_goal:.2f}")
         
         # Check if goal is reached
-        if dist_to_goal < 0.5:
+        if dist_to_goal < 0.01:
+            state = goal  # Set final position exactly at goal
+            trajectory.append(state)
             done = True
             print("Goal reached!")
     
@@ -534,112 +565,14 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     
     # Save final trajectory plot
     trajectory = np.array(trajectory)
-    viz.plot_environment(viz.ax1, state)
-    viz.ax1.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
-                 'b-', linewidth=2, label='Learned Path')
-    viz.ax1.scatter(*start, color='green', s=100, label='Start')
-    viz.ax1.scatter(*goal, color='red', s=100, label='Goal')
-    viz.ax1.legend()
-    plt.savefig('visualizations/final_trajectory.png')
+    ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
+            'b-', linewidth=2, label='Learned Path')
+    ax.legend()
     
-    # Save final control values plot
-    plt.figure(figsize=(12, 8))
-    for i, (control_name, values) in enumerate(control_values.items(), 1):
-        plt.subplot(4, 1, i)
-        plt.plot(time_steps, values, 'b-', label=control_name)
-        plt.ylabel(control_name.capitalize())
-        plt.xlabel('Time Step')
-        plt.grid(True)
-        plt.legend()
-    plt.suptitle('Final Control Values Analysis')
-    plt.tight_layout()
-    plt.savefig('visualizations/control_values_final.png')
-    
-    # Save individual control value plots
-    for control_name, values in control_values.items():
-        plt.figure(figsize=(10, 6))
-        plt.plot(time_steps, values, 'b-', linewidth=2)
-        plt.title(f'{control_name.capitalize()} Over Time')
-        plt.ylabel(control_name.capitalize())
-        plt.xlabel('Time Step')
-        plt.grid(True)
-        plt.savefig(f'visualizations/control_{control_name}.png')
-    
-    # Save control values to CSV
-    df = pd.DataFrame(control_values)
-    df['time_step'] = time_steps
-    df.to_csv('data/control_values.csv', index=False)
-    
-    # Save statistics
-    stats = {name: {
-        'mean': np.mean(values),
-        'std': np.std(values),
-        'min': np.min(values),
-        'max': np.max(values)
-    } for name, values in control_values.items()}
-    
-    with open('data/control_statistics.txt', 'w') as f:
-        f.write("Control Values Statistics:\n\n")
-        for control_name, stat in stats.items():
-            f.write(f"{control_name.capitalize()}:\n")
-            for stat_name, value in stat.items():
-                f.write(f"  {stat_name}: {value:.4f}\n")
-            f.write("\n")
-    
-    plt.close('all')
-    return control_values
-
-def create_training_gif():
-    """Create GIFs from saved frames"""
-    print("Creating GIFs from saved frames...")
-    
-    # Create optimal path GIF
-    optimal_imgs = sorted(glob.glob("frames/optimal_*.png"))
-    if optimal_imgs:
-        print(f"Processing {len(optimal_imgs)} optimal path frames...")
-        frames = []
-        for img_path in optimal_imgs:
-            frames.append(Image.open(img_path))
-        
-        frames[0].save(
-            "visualizations/optimal_path.gif",
-            save_all=True,
-            append_images=frames[1:],
-            duration=50,
-            loop=0
-        )
-        print("Created optimal path GIF")
-    
-    # Create control values GIF
-    control_imgs = sorted(glob.glob("frames/controls_*.png"))
-    if control_imgs:
-        print(f"Processing {len(control_imgs)} control value frames...")
-        frames = []
-        for img_path in control_imgs:
-            frames.append(Image.open(img_path))
-        
-        frames[0].save(
-            "visualizations/control_values.gif",
-            save_all=True,
-            append_images=frames[1:],
-            duration=50,
-            loop=0
-        )
-        print("Created control values GIF")
-    
-    # Clean up frames
-    print("Cleaning up temporary frame files...")
-    for f in glob.glob("frames/*.png"):
-        try:
-            os.remove(f)
-        except Exception as e:
-            print(f"Error removing {f}: {e}")
-    
-    try:
-        os.rmdir("frames")
-        print("Frames directory removed")
-    except OSError:
-        print("Note: Could not remove frames directory")
+    # Add start and goal markers
+    ax.scatter(*start, color='green', s=100, label='Start')
+    ax.scatter(*goal, color='red', s=100, label='Goal')
+    plt.show()
 
 if __name__ == "__main__":
     # Create necessary directories

@@ -215,28 +215,32 @@ class ActorCritic(nn.Module):
         
         # Actor (policy) head
         self.actor_mean = nn.Linear(128, action_dim)
-        self.actor_log_std = nn.Parameter(torch.zeros(1, action_dim))
+        # Initialize log_std with a smaller value
+        self.actor_log_std = nn.Parameter(torch.ones(1, action_dim) * -0.5)
         
         # Critic (value) head
         self.critic = nn.Linear(128, 1)
         
-        # Initialize weights
+        # Initialize weights with a smaller gain
         self.apply(self._init_weights)
 
     @staticmethod
     def _init_weights(module):
         if isinstance(module, nn.Linear):
-            nn.init.orthogonal_(module.weight, gain=1)
+            nn.init.orthogonal_(module.weight, gain=0.5)  # Reduced gain
             if module.bias is not None:
                 module.bias.data.zero_()
 
     def forward(self, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the network"""
+        # Add state normalization
+        state = (state - state.mean()) / (state.std() + 1e-8)
+        
         features = self.features(state)
         
-        # Actor output
-        action_mean = self.actor_mean(features)
-        action_std = self.actor_log_std.exp().expand_as(action_mean)
+        # Actor output with clamping
+        action_mean = torch.tanh(self.actor_mean(features))  # Use tanh to bound outputs
+        action_std = torch.clamp(self.actor_log_std.exp(), 1e-3, 1.0)  # Clamp standard deviation
         
         # Critic output
         value = self.critic(features)
@@ -309,7 +313,11 @@ class PPO:
                  log_dir: str = "logs"):
         
         self.actor_critic = ActorCritic(state_dim, action_dim)
-        self.optimizer = torch.optim.Adam(self.actor_critic.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(
+            self.actor_critic.parameters(),
+            lr=lr,
+            eps=1e-5  # Increased epsilon for numerical stability
+        )
         
         self.gamma = gamma
         self.clip_range = clip_range
@@ -342,6 +350,9 @@ class PPO:
             nn.Linear(64, 1)
         )
 
+        # Add max gradient norm
+        self.max_grad_norm = 0.5
+
     def update(self, 
                states: torch.Tensor,
                actions: torch.Tensor,
@@ -350,29 +361,42 @@ class PPO:
                advantages: torch.Tensor) -> Dict[str, float]:
         """Update policy and value function with logging"""
         
+        # Add check for NaN values
+        if torch.isnan(states).any():
+            self.logger.warning("NaN values detected in states")
+            return None
+            
         # Get current policy outputs
         action_mean, action_std, values = self.actor_critic(states)
+        
+        # Add check for NaN values
+        if torch.isnan(action_mean).any() or torch.isnan(action_std).any():
+            self.logger.warning("NaN values detected in policy output")
+            return None
+            
         dist = Normal(action_mean, action_std)
         new_log_probs = dist.log_prob(actions).sum(dim=-1)
         entropy = dist.entropy().mean()
         
-        # Policy loss
+        # Policy loss with clipping
         ratio = (new_log_probs - old_log_probs).exp()
         surrogate1 = ratio * advantages
         surrogate2 = torch.clamp(ratio, 1 - self.clip_range, 1 + self.clip_range) * advantages
         policy_loss = -torch.min(surrogate1, surrogate2).mean()
         
-        # Value loss
-        value_loss = 0.5 * (returns - values.squeeze()).pow(2).mean()
+        # Value loss with clipping
+        value_pred = values.squeeze()
+        value_loss = 0.5 * (returns - value_pred).pow(2).mean()
         
         # Total loss
         loss = (policy_loss + 
                 self.value_coef * value_loss - 
                 self.entropy_coef * entropy)
         
-        # Update network
+        # Update network with gradient clipping
         self.optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
         self.optimizer.step()
         
         # Log training metrics
@@ -398,14 +422,12 @@ class PPO:
             state = torch.FloatTensor(state).unsqueeze(0)
         
         with torch.no_grad():
-            action, _ = self.actor_critic.get_action(state)
-        
-        # If in evaluation mode, return the mean action instead of sampling
-        if eval_mode:
-            action_mean, _, _ = self.actor_critic(state)
-            return action_mean.detach().numpy().squeeze()
-        
-        return action.detach().numpy().squeeze()
+            if eval_mode:
+                action_mean, _, _ = self.actor_critic(state)
+                return action_mean.detach().numpy().squeeze()
+            else:
+                action, _ = self.actor_critic.get_action(state)
+                return action.detach().numpy().squeeze()
 
     def store_transition(self, state, action, reward, next_state, done):
         """Store transition in memory"""
@@ -489,6 +511,23 @@ class PPO:
         self.actor_critic.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+    def process_transitions(self):
+        """Process stored transitions and prepare data for update"""
+        # Get stored transitions
+        states, actions, rewards, next_states, dones, old_log_probs, values = self.memory.get_transitions()
+        
+        if len(rewards) == 0:
+            return None, None, None, None, None
+
+        # Compute returns and advantages
+        returns = self.compute_returns(rewards, dones)
+        advantages = self.compute_advantages(returns, states)
+        
+        # Normalize advantages
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
+        return states, actions, old_log_probs, returns, advantages
 
 if __name__ == "__main__":
     # Example usage

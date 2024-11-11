@@ -3,3 +3,7 @@ logs
 *.log
 wandb/
 __pycache__/
+models/
+*.pth
+frames/
+data/

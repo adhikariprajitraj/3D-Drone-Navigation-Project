@@ -10,20 +10,26 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.append(project_root)
 from optimization_rl.reinforcement_learning.ppo_agent import PPO, DroneEnv
 
-def visualize_trajectory(env, agent, max_steps=200, save_path=None):
-    """Visualize the drone's trajectory in 3D"""
-    fig = plt.figure(figsize=(12, 8))
+def visualize_trajectory(env, agent, max_steps=200):
+    """Create a visualization of the drone's trajectory"""
+    fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
     
     # Record trajectory
-    state = env.reset()
-    positions = [env.position.copy()]
+    state = env.reset()  # This should return the initial state
+    # Get initial position from state (assuming first 3 values are position)
+    positions = [state[:3].copy()]  # Take first 3 values as position
     
     for _ in range(max_steps):
         state_tensor = torch.FloatTensor(state).unsqueeze(0)
-        action = agent.select_action(state_tensor, eval_mode=True)
+        with torch.no_grad():
+            action = agent.select_action(state_tensor, eval_mode=True)
+            if isinstance(action, torch.Tensor):
+                action = action.numpy()
+        
         state, _, done, _ = env.step(action)
-        positions.append(env.position.copy())
+        # Get position from state
+        positions.append(state[:3].copy())
         
         if done:
             break
@@ -31,18 +37,10 @@ def visualize_trajectory(env, agent, max_steps=200, save_path=None):
     positions = np.array(positions)
     
     # Plot trajectory
-    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], 
-            'b-', label='Drone Path', linewidth=2)
-    
-    # Plot start and end points
-    ax.scatter(*positions[0], color='green', s=100, label='Start')
-    ax.scatter(*positions[-1], color='red', s=100, label='End')
-    
-    # Plot goal
-    ax.scatter(*env.goal, color='purple', s=100, label='Goal')
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2], 'b-', label='Trajectory')
     
     # Plot obstacles
-    for obs in env.obstacles:
+    for obs in env.static_obstacles:  # Changed from env.obstacles to env.static_obstacles
         x, y, z, r = obs
         u = np.linspace(0, 2 * np.pi, 20)
         v = np.linspace(0, np.pi, 20)
@@ -51,21 +49,16 @@ def visualize_trajectory(env, agent, max_steps=200, save_path=None):
         z_surf = r * np.outer(np.ones(np.size(u)), np.cos(v)) + z
         ax.plot_surface(x_surf, y_surf, z_surf, color='red', alpha=0.3)
     
-    # Set labels and title
+    # Plot start and goal
+    ax.scatter(*positions[0], color='green', s=100, label='Start')
+    ax.scatter(*env.goal, color='red', s=100, label='Goal')
+    
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
-    ax.set_title('Drone Navigation Trajectory')
     ax.legend()
     
-    # Set bounds
-    ax.set_xlim([0, env.bounds[0]])
-    ax.set_ylim([0, env.bounds[1]])
-    ax.set_zlim([0, env.bounds[2]])
-    
-    if save_path:
-        plt.savefig(save_path)
-    
+    plt.show()
     return fig
 
 def visualize_multiple_trajectories(env, agent, num_trajectories=5):

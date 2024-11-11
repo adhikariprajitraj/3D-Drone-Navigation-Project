@@ -46,6 +46,10 @@ Ensure you have Python 3.7+ installed and a virtual environment set up.
    ```bash
    python train_rl_model.py
    ```
+- **Run the model**:
+   ```bash
+   python main.py
+   ```
 
 ## Contributing
 Contributions are welcome. Please fork the repository and submit a pull request with clear documentation.

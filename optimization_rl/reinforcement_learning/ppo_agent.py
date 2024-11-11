@@ -112,23 +112,40 @@ class DroneEnv(gym.Env):
         return new_state, reward, done, {}
 
     def _apply_action(self, action: np.ndarray):
-        """Apply action to update drone state"""
-        # Extract actions
+        # Unpack the action components
         throttle, pitch, roll, yaw = action
-        
-        # Update orientation
+
+        # Update orientation by small increments based on pitch, roll, and yaw
         self.orientation += np.array([pitch, roll, yaw]) * 0.1
-        
-        # Calculate movement direction based on orientation
-        direction = self._get_direction_from_orientation()
-        
-        # Update velocity
-        self.velocity = direction * throttle * 0.5
-        
-        # Update position
+
+        # Compute gravity-adjusted vertical velocity from throttle
+        gravity = 0.05
+        max_vertical_speed = 1.0
+        vertical_velocity = throttle * max_vertical_speed - gravity
+
+        # Calculate forward velocity based on pitch and yaw (affects x and y movement)
+        max_forward_speed = 1.0
+        forward_direction = np.array([
+            np.cos(self.orientation[2]) * np.cos(self.orientation[0]),
+            np.sin(self.orientation[2]) * np.cos(self.orientation[0]),
+            0
+        ])
+        forward_velocity = pitch * max_forward_speed * forward_direction
+
+        # Calculate lateral velocity based on roll and yaw (affects x and y movement)
+        max_lateral_speed = 0.5
+        lateral_direction = np.array([
+            -np.sin(self.orientation[2]),
+            np.cos(self.orientation[2]),
+            0
+        ])
+        lateral_velocity = roll * max_lateral_speed * lateral_direction
+
+        # Combine all velocity components
+        self.velocity = forward_velocity + lateral_velocity + np.array([0, 0, vertical_velocity])
+
+        # Update position with the computed velocity, ensuring it's valid
         new_position = self.position + self.velocity
-        
-        # Check bounds and collision before updating position
         if self._is_valid_position(new_position):
             self.position = new_position
 
@@ -205,7 +222,7 @@ class ActorCritic(nn.Module):
     def __init__(self, state_dim: int, action_dim: int):
         super().__init__()
         
-        # Shared features
+        # Shared features extractor
         self.features = nn.Sequential(
             nn.Linear(state_dim, 256),
             nn.ReLU(),
@@ -213,24 +230,23 @@ class ActorCritic(nn.Module):
             nn.ReLU()
         )
         
-        # Actor (policy) head
-        self.actor_mean = nn.Linear(128, action_dim)
-        # Initialize log_std with a smaller value
-        self.actor_log_std = nn.Parameter(torch.ones(1, action_dim) * -0.5)
+        # Actor head (policy network)
+        self.actor = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, action_dim)  # Outputs mean of action distribution
+        )
         
-        # Critic (value) head
-        self.critic = nn.Linear(128, 1)
+        # Learnable log standard deviation
+        self.actor_log_std = nn.Parameter(torch.zeros(action_dim))
         
-        # Initialize weights with a smaller gain
-        self.apply(self._init_weights)
-
-    @staticmethod
-    def _init_weights(module):
-        if isinstance(module, nn.Linear):
-            nn.init.orthogonal_(module.weight, gain=0.5)  # Reduced gain
-            if module.bias is not None:
-                module.bias.data.zero_()
-
+        # Critic head (value network)
+        self.critic = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
+    
     def forward(self, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the network"""
         # Add state normalization
@@ -238,11 +254,13 @@ class ActorCritic(nn.Module):
         
         features = self.features(state)
         
-        # Actor output with clamping
-        action_mean = torch.tanh(self.actor_mean(features))  # Use tanh to bound outputs
-        action_std = torch.clamp(self.actor_log_std.exp(), 1e-3, 1.0)  # Clamp standard deviation
+        # Get action mean from actor network
+        action_mean = self.actor(features)
         
-        # Critic output
+        # Get action std from learnable parameter
+        action_std = torch.clamp(self.actor_log_std.exp(), min=1e-3, max=1.0)
+        
+        # Get value from critic network
         value = self.critic(features)
         
         return action_mean, action_std, value
@@ -255,6 +273,16 @@ class ActorCritic(nn.Module):
         log_prob = dist.log_prob(action).sum(dim=-1)
         
         return action, log_prob
+
+    def get_value(self, state: torch.Tensor) -> torch.Tensor:
+        """Get the value estimate for a given state"""
+        features = self.features(state)
+        return self.critic(features)
+
+    def get_action_mean(self, state: torch.Tensor) -> torch.Tensor:
+        """Get the mean action for a given state"""
+        features = self.features(state)
+        return self.actor(features)
 
 class Memory:
     """Memory buffer for storing trajectories"""
@@ -279,15 +307,24 @@ class Memory:
             self.values.append(value)
 
     def get_transitions(self):
-        states = torch.FloatTensor(np.array(self.states))
-        actions = torch.FloatTensor(np.array(self.actions))
-        rewards = torch.FloatTensor(np.array(self.rewards))
-        next_states = torch.FloatTensor(np.array(self.next_states))
-        dones = torch.FloatTensor(np.array(self.dones))
-        log_probs = torch.FloatTensor(np.array(self.log_probs)) if self.log_probs else None
-        values = torch.FloatTensor(np.array(self.values)) if self.values else None
+        """Convert and concatenate stored transitions into tensors"""
+        # Convert lists to tensors, ensuring proper type conversion
+        states = torch.cat([s if isinstance(s, torch.Tensor) else torch.FloatTensor(s) 
+                          for s in self.states])
+        actions = torch.cat([a if isinstance(a, torch.Tensor) else torch.FloatTensor(a) 
+                           for a in self.actions])
+        rewards = torch.cat([torch.FloatTensor([r]) if not isinstance(r, torch.Tensor) 
+                           else r for r in self.rewards])
+        next_states = torch.cat([torch.FloatTensor(s) if not isinstance(s, torch.Tensor) 
+                               else s for s in self.next_states])
+        dones = torch.cat([torch.FloatTensor([d]) if not isinstance(d, torch.Tensor) 
+                          else d for d in self.dones])
+        log_probs = torch.cat(self.log_probs)
+        values = torch.cat(self.values)
         
+        # Clear memory
         self.clear()
+        
         return states, actions, rewards, next_states, dones, log_probs, values
 
     def clear(self):
@@ -437,25 +474,33 @@ class PPO(torch.nn.Module):
                 return action.detach().numpy().squeeze()
 
     def store_transition(self, state, action, reward, next_state, done):
-        """Store transition in memory"""
-        # Convert state to tensor and get value and log_prob
+        """Store a transition in memory"""
+        # Ensure state is a tensor
+        if not isinstance(state, torch.Tensor):
+            state = torch.FloatTensor(state)
+        
+        # Convert action to tensor if it's not already
+        if isinstance(action, np.ndarray):
+            action = torch.from_numpy(action).float()
+        
+        # Convert next_state to tensor
+        if isinstance(next_state, np.ndarray):
+            next_state = torch.from_numpy(next_state).float()
+        
+        # Get log probability and value for the state-action pair
         with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            action_tensor = torch.FloatTensor(action).unsqueeze(0)
-            _, _, value = self.actor_critic(state_tensor)
-            action_mean, action_std, _ = self.actor_critic(state_tensor)
-            dist = Normal(action_mean, action_std)
-            log_prob = dist.log_prob(action_tensor).sum(dim=-1)
-
-        self.memory.store(
-            state=state,
-            action=action,
-            reward=reward,
-            next_state=next_state,
-            done=done,
-            log_prob=log_prob.detach().numpy(),
-            value=value.detach().numpy()
-        )
+            dist = self.get_action_distribution(state)
+            log_prob = dist.log_prob(action).sum(dim=-1)
+            value = self.get_value(state)
+        
+        # Store everything in memory
+        self.memory.states.append(state)
+        self.memory.actions.append(action)
+        self.memory.rewards.append(torch.FloatTensor([reward]))
+        self.memory.next_states.append(next_state)
+        self.memory.dones.append(torch.FloatTensor([done]))
+        self.memory.log_probs.append(log_prob)
+        self.memory.values.append(value)
 
     def compute_returns(self, rewards, dones):
         """Compute returns using GAE"""
@@ -535,6 +580,20 @@ class PPO(torch.nn.Module):
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         return states, actions, old_log_probs, returns, advantages
+
+    def get_action_distribution(self, state):
+        """Get the action distribution for a given state"""
+        # Get mean and std from actor network
+        action_mean, action_std, _ = self.actor_critic(state)
+        
+        # Create normal distribution
+        dist = torch.distributions.Normal(action_mean, action_std)
+        
+        return dist
+
+    def get_value(self, state):
+        """Get the value estimate for a given state"""
+        return self.actor_critic.get_value(state)
 
 if __name__ == "__main__":
     # Example usage

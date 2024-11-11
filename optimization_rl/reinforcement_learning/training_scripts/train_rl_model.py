@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation
 import random
+import tempfile
+import imageio
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 sys.path.append(project_root)
@@ -402,9 +404,13 @@ def train():
 
     return agent, env, optimal_path, start, goal
 
-def visualize_learned_policy(agent, env, optimal_path, start, goal):
+def visualize_learned_policy(agent, env, optimal_path, start, goal, scenario_name="default"):
     """Visualize the learned policy execution"""
     print("Starting visualization...")
+    
+    # Create temporary directory for frames
+    temp_dir = tempfile.mkdtemp()
+    frames = []
     
     # Create a single figure with one 3D subplot
     fig = plt.figure(figsize=(10, 8))
@@ -420,6 +426,14 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
     max_steps = 500
     step = 0
     closest_idx = 0
+    
+    # Store control values during trajectory
+    control_history = {
+        'roll': [],
+        'pitch': [],
+        'yaw': [],
+        'throttle': []
+    }
     
     while not done and step < max_steps:
         step += 1
@@ -560,6 +574,11 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
         ax.text(env.bounds[0] * 0.05, env.bounds[1] * 0.95, env.bounds[2] * 0.95, 
                 status_text, fontsize=8)
         
+        # Save frame
+        frame_path = os.path.join(temp_dir, f'frame_{step:04d}.png')
+        plt.savefig(frame_path)
+        frames.append(frame_path)
+        
         plt.pause(0.01)
         
         # Print progress
@@ -572,20 +591,47 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal):
             trajectory.append(state)
             done = True
             print("Goal reached!")
+        
+        # Store control values (from the action)
+        control_history['roll'].append(action[0])
+        control_history['pitch'].append(action[1])
+        control_history['yaw'].append(action[2])
+        control_history['throttle'].append(action[3] if len(action) > 3 else 0)
     
-    if not done:
-        print(f"Maximum steps ({max_steps}) reached without reaching goal")
+    # Create GIF
+    print("Creating GIF...")
+    images = []
+    for frame in frames:
+        images.append(imageio.imread(frame))
     
-    # Plot final trajectory
-    trajectory = np.array(trajectory)
-    ax.plot(trajectory[:, 0], trajectory[:, 1], trajectory[:, 2], 
-            'b-', linewidth=2, label='Learned Path')
-    ax.legend()
+    # Save GIF
+    gif_path = f'trajectory_{scenario_name}.gif'
+    imageio.mimsave(gif_path, images, fps=10)
+    print(f"Trajectory saved to {gif_path}")
     
-    # Add start and goal markers
-    ax.scatter(*start, color='green', s=100, label='Start')
-    ax.scatter(*goal, color='red', s=100, label='Goal')
-    plt.show()
+    # Cleanup temporary files
+    for frame in frames:
+        os.remove(frame)
+    os.rmdir(temp_dir)
+    
+    # After trajectory completion, create control value plots
+    fig_controls, axs = plt.subplots(2, 2, figsize=(15, 10))
+    fig_controls.suptitle('Control Values Over Time')
+    
+    for idx, (control, values) in enumerate(control_history.items()):
+        row = idx // 2
+        col = idx % 2
+        axs[row, col].plot(values, label=control)
+        axs[row, col].set_title(f'{control.capitalize()} vs Time')
+        axs[row, col].set_xlabel('Time Step')
+        axs[row, col].set_ylabel(f'{control.capitalize()} Value')
+        axs[row, col].grid(True)
+        axs[row, col].legend()
+    
+    plt.tight_layout()
+    plt.savefig(f'control_values_{scenario_name}.png')
+    print(f"Control values saved to control_values_{scenario_name}.png")
+    plt.close(fig_controls)
 
 if __name__ == "__main__":
     # Create models directory if it doesn't exist

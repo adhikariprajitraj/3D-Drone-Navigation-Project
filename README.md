@@ -1,7 +1,7 @@
 # 3D Drone Navigation Project
 
 ## Overview
-The 3D Drone Navigation project aims to design a sophisticated simulation where a drone navigates through a 3D cubic space filled with static obstacles. The primary goal is to develop a reinforcement learning (RL) model and path optimization algorithms to guide the drone in finding the shortest path from a starting point to an endpoint within this environment, while avoiding collisions.
+The 3D Drone Navigation project aims to design a sophisticated simulation in which a drone navigates through a 3D cubic space filled with static obstacles. The primary goal is to develop a reinforcement learning (RL) model and path optimization algorithms to guide the drone in finding the shortest path from a starting point to an endpoint within this environment while avoiding collisions.
 
 ## Project Objectives
 - **Simulate a 3D environment** with static obstacles to test drone navigation.
@@ -10,6 +10,7 @@ The 3D Drone Navigation project aims to design a sophisticated simulation where 
 - **Integrate RL algorithms** (e.g., Proximal Policy ) for dynamic path optimization.
 - **Evaluate the performance** of the drone based on path length, time taken, and obstacle avoidance.
 
+![Drone Navigation](nav3d.gif)
 ## Features
 - **3D Cubic Environment**: A simulated 3D space containing various static obstacles.
 - **Path Planning**: Initial paths are generated using traditional algorithms.

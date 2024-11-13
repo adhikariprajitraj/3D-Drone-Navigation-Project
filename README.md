@@ -10,7 +10,10 @@ The 3D Drone Navigation project aims to design a sophisticated simulation in whi
 - **Integrate RL algorithms** (e.g., Proximal Policy ) for dynamic path optimization.
 - **Evaluate the performance** of the drone based on path length, time taken, and obstacle avoidance.
 
-![Drone Navigation](nav3d.gif)
+<div align="center">
+    <img src="nav3d.gif" alt="Drone Navigation" />
+</div>
+
 ## Features
 - **3D Cubic Environment**: A simulated 3D space containing various static obstacles.
 - **Path Planning**: Initial paths are generated using traditional algorithms.

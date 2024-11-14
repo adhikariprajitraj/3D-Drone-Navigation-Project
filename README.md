@@ -32,47 +32,50 @@ The quadrotor dynamics are modeled using standard translational and rotational e
 |----------------|----------------------------------------|
 | \( x, y, z \)           | Position coordinates in 3D space    |
 | \( u, v, w \)           | Velocity components along \(x, y, z\)|
-| \( \phi, \theta, \psi \) | Roll, pitch, and yaw angles        |
-| \( \omega_1, \omega_2, \omega_3, \omega_4 \) | Rotor speeds |
+| \( $\phi$, $\theta$, $\psi$ \) | Roll, pitch, and yaw angles        |
+| \( $\omega_1$, $\omega_2$, $\omega_3$, $\omega_4$ \) | Rotor speeds |
 | \( l \)        | Distance from the center to each rotor |
 | \( b \)        | Torque constant                        |
 | \( k \)        | Aerodynamic constant                   |
-| \( I_x, I_y, I_z \)     | Moments of inertia along each axis |
+| \( $I_x$, $I_y$, $I_z$ \)     | Moments of inertia along each axis |
 | \( m \)        | Mass of the quadrotor                  |
 | \( g \)        | Gravitational acceleration             |
 
-### Translational Dynamics
+### Translational Equations of Motion
 
-The translational dynamics, describing the drone's movement in space, are given by Newton's second law:
+From the Newton-Euler equations (Equations 1, 2, and 3), you can calculate the accelerations along the x, y, and z axes using the thrust and orientation angles.
 
-\[
-m \ddot{x} = -\sin \theta \cdot F
-\]
-\[
-m \ddot{y} = \sin \phi \cos \theta \cdot F
-\]
-\[
-m \ddot{z} = g - \cos \phi \cos \theta \cdot F
-\]
+1.  $a_x = \frac{T \cdot \sin(\theta)}{m}$
 
-where:
-- \( F \) is the total thrust produced by the rotors: \( F = k(\omega_1^2 + \omega_2^2 + \omega_3^2 + \omega_4^2) \).
+2.  $a_y = \frac{-mg \cdot \cos(\theta) \cdot \sin(\phi)}{m}$
 
-### Rotational Dynamics
+3.  $a_z = \frac{T - mg \cdot \cos(\theta) \cdot \cos(\phi)}{m}$
 
-The rotational dynamics govern the drone's orientation and are given by:
+### Rotational Equations of Motion
 
-\[
-I_x \ddot{\phi} = l \cdot k (\omega_2^2 - \omega_4^2)
-\]
-\[
-I_y \ddot{\theta} = l \cdot k (\omega_3^2 - \omega_1^2)
-\]
-\[
-I_z \ddot{\psi} = b (\omega_1^2 - \omega_2^2 + \omega_3^2 - \omega_4^2)
-\]
+The roll, pitch, and yaw torques, which are calculated from the rotor speeds, affect the drone’s angular acceleration. Using Equations 4, 5, and 6:
 
-These equations determine the roll, pitch, and yaw movements of the quadrotor in response to rotor speed adjustments.
+4.  $\dot{p} = \frac{l \cdot k \cdot (\omega_4^2 - \omega_2^2)}{I_{x3}} - \frac{q \cdot r \cdot (I_{z3} - I_{y3})}{I_{x3}}$
+   
+6.  $\dot{q} = \frac{l \cdot k \cdot (\omega_3^2 - \omega_1^2)}{I_{y3}} - \frac{r \cdot p \cdot (I_{x3} - I_{z3})}{I_{y3}}$
+   
+8.  $\dot{r} = \frac{b \cdot (\omega_1^2 - \omega_2^2 + \omega_3^2 - \omega_4^2)}{I_{z3}} + \frac{p \cdot q \cdot (I_{y3} - I_{x3})}{I_{z3}}$
+
+
+
+### Transformation from Inertial Frame to Body-Fixed Frame
+
+The angular velocities in the body-fixed frame (\( p \), \( q \), \( r \)) can be related to the rates of change of the Euler angles (\( $\dot{\phi}$ \), \( $\dot{\theta}$ \), \( $\dot{\psi} $\)) by the following transformation:
+
+$$
+\begin{bmatrix} p & q & r \end{bmatrix}^T =
+\begin{bmatrix}
+1 & 0 & -\sin(\theta) \\
+0 & \cos(\phi) & \cos(\theta) \sin(\phi) \\
+0 & -\sin(\phi) & \cos(\theta) \cos(\phi)
+\end{bmatrix}
+\begin{bmatrix} \dot{\phi} & \dot{\theta} & \dot{\psi} \end{bmatrix}^T
+$$
 
 ---
 
@@ -92,7 +95,7 @@ The project uses Proximal Policy Optimization (PPO) as the primary RL algorithm.
 
 ### Action and State Representation
 
-- **Actions**: The agent’s actions correspond to the four rotor speeds, \(\omega_1\), \(\omega_2\), \(\omega_3\), and \(\omega_4\), controlling thrust and rotational dynamics.
+- **Actions**: The agent’s actions correspond to the four rotor speeds, \($\omega_1$\), \($\omega_2$\), \($\omega_3$\), and \($\omega_4$\), controlling thrust and rotational dynamics.
 - **State**: The state vector includes position, orientation, velocity, goal distance, and obstacle information.
 
 ### Reward Function

@@ -429,10 +429,10 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal, scenario_nam
     
     # Store control values during trajectory
     control_history = {
-        'roll': [],
-        'pitch': [],
-        'yaw': [],
-        'throttle': []
+        'omega1': [],
+        'omega2': [],
+        'omega3': [],
+        'omega4': []
     }
     
     while not done and step < max_steps:
@@ -593,10 +593,10 @@ def visualize_learned_policy(agent, env, optimal_path, start, goal, scenario_nam
             print("Goal reached!")
         
         # Store control values (from the action)
-        control_history['roll'].append(action[0])
-        control_history['pitch'].append(action[1])
-        control_history['yaw'].append(action[2])
-        control_history['throttle'].append(action[3] if len(action) > 3 else 0)
+        control_history['omega1'].append(action[0])
+        control_history['omega2'].append(action[1])
+        control_history['omega3'].append(action[2])
+        control_history['omega4'].append(action[3] if len(action) > 3 else 0)
     
     # Create GIF
     print("Creating GIF...")

@@ -27,19 +27,35 @@ class DroneEnv(gym.Env):
         self.bounds = bounds
         self.goal = goal
         
+        # Drone parameters
+        self.l = 0.5  # Arm length (example value)
+        self.b = 1e-7  # Torque constant (example value)
+        self.k = 1e-6  # Lift constant (example value)
+        self.I_x3 = 0.01  # Inertia around x-axis
+        self.I_y3 = 0.01  # Inertia around y-axis
+        self.I_z3 = 0.02  # Inertia around z-axis
+        self.m = 1.5  # Mass of the drone
+        self.g = 9.81  # Gravity
+        self.dt = 0.1  # Time step
+        
+        # Add angular velocity initialization
+        self.p = 0.0  # Roll rate
+        self.q = 0.0  # Pitch rate
+        self.r = 0.0  # Yaw rate
+        
         # Define action and observation spaces
         self.action_space = spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(4,),  # [throttle, pitch, roll, yaw]
+            low = 0.0,
+            high = 1.0,
+            shape=(4,),  # [w1, w2, w3, w4 : rotor speeds]
             dtype=np.float32
         )
         
-        # State space: [position(3), orientation(3), velocity(3), goal_distance(1), obstacle_info(27)]
+        # State space: [position(3), orientation(3), velocity(3), angular_velocity(3), goal_distance(1), obstacle_info(27)]
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(37,),
+            shape=(40,),  # Updated from 37 to 40 to include p, q, r
             dtype=np.float32
         )
         
@@ -55,22 +71,41 @@ class DroneEnv(gym.Env):
             np.random.uniform(0.0, 2.0)
         ])
         self.orientation = np.zeros(3)  # Start with stable orientation
-        self.velocity = np.zeros(3)
+        self.velocity = np.zeros(3)     # Linear velocity
+        
+        # Reset angular velocities
+        self.p = 0.0  # Roll rate
+        self.q = 0.0  # Pitch rate
+        self.r = 0.0  # Yaw rate
         
         return self._get_state()
 
     def _get_state(self) -> np.ndarray:
-        """Construct state vector"""
+        """Construct state vector with angular velocities"""
+        # Calculate goal distance
         goal_distance = np.linalg.norm(self.position - np.array(self.goal))
+        
+        # Get obstacle information
         obstacle_info = self._get_obstacle_info()
         
-        return np.concatenate([
-            self.position,
-            self.orientation,
-            self.velocity,
-            [goal_distance],
-            obstacle_info
+        # Create angular velocity vector
+        angular_velocity = np.array([self.p, self.q, self.r])
+        
+        # Normalize angular velocities (optional but recommended)
+        max_angular_velocity = 2 * np.pi  # Maximum expected angular velocity in rad/s
+        normalized_angular_velocity = np.clip(angular_velocity / max_angular_velocity, -1, 1)
+        
+        # Concatenate all state components
+        state = np.concatenate([
+            self.position,          # [0:3]   - Position (x, y, z)
+            self.orientation,       # [3:6]   - Orientation (roll, pitch, yaw)
+            self.velocity,          # [6:9]   - Linear velocity
+            normalized_angular_velocity,  # [9:12]  - Angular velocity (p, q, r)
+            [goal_distance],        # [12]    - Distance to goal
+            obstacle_info          # [13:40] - Obstacle information
         ])
+        
+        return state
 
     def _get_obstacle_info(self) -> np.ndarray:
         """Get simplified obstacle information from surrounding voxels"""
@@ -112,55 +147,45 @@ class DroneEnv(gym.Env):
         return new_state, reward, done, {}
 
     def _apply_action(self, action: np.ndarray):
-        # Unpack the action components
-        throttle, pitch, roll, yaw = action
+        # Unpack rotor speeds from action
+        omega1, omega2, omega3, omega4 = action
 
-        # Update orientation by small increments based on pitch, roll, and yaw
-        self.orientation += np.array([pitch, roll, yaw]) * 0.1
+        # Calculate total thrust
+        T = self.k * (omega1**2 + omega2**2 + omega3**2 + omega4**2)
 
-        # Compute gravity-adjusted vertical velocity from throttle
-        gravity = 0.05
-        max_vertical_speed = 1.0
-        vertical_velocity = throttle * max_vertical_speed - gravity
+        # Calculate torques
+        tau_x = self.l * self.k * (omega4**2 - omega2**2)  # Roll torque
+        tau_y = self.l * self.k * (omega3**2 - omega1**2)  # Pitch torque
+        tau_z = self.b * (omega1**2 - omega2**2 + omega3**2 - omega4**2)  # Yaw torque
 
-        # Calculate forward velocity based on pitch and yaw (affects x and y movement)
-        max_forward_speed = 1.0
-        forward_direction = np.array([
-            np.cos(self.orientation[2]) * np.cos(self.orientation[0]),
-            np.sin(self.orientation[2]) * np.cos(self.orientation[0]),
-            0
-        ])
-        forward_velocity = pitch * max_forward_speed * forward_direction
+        # Translational accelerations
+        a_x = T * np.sin(self.orientation[1]) / self.m
+        a_y = T * np.sin(self.orientation[0]) * np.cos(self.orientation[1]) / self.m
+        a_z = (T - self.m * self.g) / self.m
 
-        # Calculate lateral velocity based on roll and yaw (affects x and y movement)
-        max_lateral_speed = 0.5
-        lateral_direction = np.array([
-            -np.sin(self.orientation[2]),
-            np.cos(self.orientation[2]),
-            0
-        ])
-        lateral_velocity = roll * max_lateral_speed * lateral_direction
+        # Rotational accelerations (using Newton-Euler equations)
+        p_dot = (tau_x - self.q * self.r * (self.I_z3 - self.I_y3)) / self.I_x3
+        q_dot = (tau_y - self.r * self.p * (self.I_x3 - self.I_z3)) / self.I_y3
+        r_dot = (tau_z - self.p * self.q * (self.I_y3 - self.I_x3)) / self.I_z3
 
-        # Combine all velocity components
-        self.velocity = forward_velocity + lateral_velocity + np.array([0, 0, vertical_velocity])
+        # Update velocities
+        self.velocity[0] += a_x * self.dt
+        self.velocity[1] += a_y * self.dt
+        self.velocity[2] += a_z * self.dt
 
-        # Update position with the computed velocity, ensuring it's valid
-        new_position = self.position + self.velocity
-        if self._is_valid_position(new_position):
-            self.position = new_position
+        # Update angular velocities
+        self.p += p_dot * self.dt
+        self.q += q_dot * self.dt
+        self.r += r_dot * self.dt
 
-    def _get_direction_from_orientation(self) -> np.ndarray:
-        """Convert orientation to direction vector"""
-        pitch, roll, yaw = self.orientation
-        
-        # Simple conversion (can be made more complex with proper rotation matrices)
-        direction = np.array([
-            np.cos(yaw) * np.cos(pitch),
-            np.sin(yaw) * np.cos(pitch),
-            np.sin(pitch)
-        ])
-        
-        return direction
+        # Update position based on new velocity
+        self.position += self.velocity * self.dt
+
+        # Update orientation based on new angular velocity
+        self.orientation[0] += self.p * self.dt  # Roll
+        self.orientation[1] += self.q * self.dt  # Pitch
+        self.orientation[2] += self.r * self.dt  # Yaw
+
 
     def _is_valid_position(self, position: np.ndarray) -> bool:
         """Check if position is valid (within bounds and not colliding)"""
@@ -175,8 +200,8 @@ class DroneEnv(gym.Env):
         
         return True
 
-    def _calculate_reward(self) -> float:
-        """Calculate reward based on current state"""
+    def _calculate_reward(self, action: np.ndarray) -> float:
+        """Calculate reward based on current state including angular velocity"""
         reward = 0.0
         
         # Distance to goal reward
@@ -202,7 +227,23 @@ class DroneEnv(gym.Env):
         orientation_penalty = -0.1 * np.sum(np.abs(self.orientation))
         reward += orientation_penalty
         
+        # Add penalty for excessive angular velocities
+        angular_velocity_magnitude = np.sqrt(self.p**2 + self.q**2 + self.r**2)
+        max_desired_angular_velocity = np.pi  # Maximum desired angular velocity in rad/s
+        if angular_velocity_magnitude > max_desired_angular_velocity:
+            angular_velocity_penalty = -0.1 * (angular_velocity_magnitude - max_desired_angular_velocity)
+            reward += angular_velocity_penalty
+        
+        # Rotor speed penalties based on action values (since actions are rotor speeds)
+        max_speed = 1.0  # Define maximum allowed rotor speed
+        for speed in action:  # Assume action contains the four rotor speeds
+            if speed < 0.0:
+                reward -= 50.0  # Penalty for negative speeds
+            elif speed > max_speed:
+                reward -= (speed - max_speed) * 10.0  # Penalty for exceeding max speed
+
         return reward
+
 
     def _is_done(self) -> bool:
         """Check if episode is complete"""
@@ -215,6 +256,17 @@ class DroneEnv(gym.Env):
             return True
         
         return False
+
+    def _extract_angular_velocities(self, state: np.ndarray) -> np.ndarray:
+        """Extract angular velocities from state vector"""
+        # Angular velocities are at indices 9:12
+        normalized_angular_velocity = state[9:12]
+        
+        # Denormalize if necessary
+        max_angular_velocity = 2 * np.pi
+        angular_velocity = normalized_angular_velocity * max_angular_velocity
+        
+        return angular_velocity
 
 class ActorCritic(nn.Module):
     """Actor-Critic Network for PPO"""
@@ -234,7 +286,8 @@ class ActorCritic(nn.Module):
         self.actor = nn.Sequential(
             nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Linear(64, action_dim)  # Outputs mean of action distribution
+            nn.Linear(64, action_dim),  # Outputs mean of action distribution
+            nn.Softplus()
         )
         
         # Learnable log standard deviation
@@ -266,13 +319,17 @@ class ActorCritic(nn.Module):
         return action_mean, action_std, value
 
     def get_action(self, state: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Sample action from the policy"""
+        """Sample action from the policy, ensuring non-negative rotor speeds."""
         action_mean, action_std, _ = self(state)
+        action_mean = torch.relu(action_mean)  # Apply ReLU to ensure non-negative mean
         dist = Normal(action_mean, action_std)
         action = dist.sample()
+        action = torch.clamp(action, min=0.0)  # Clamp to ensure non-negative rotor speeds
         log_prob = dist.log_prob(action).sum(dim=-1)
         
         return action, log_prob
+
+
 
     def get_value(self, state: torch.Tensor) -> torch.Tensor:
         """Get the value estimate for a given state"""
